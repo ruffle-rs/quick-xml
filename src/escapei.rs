@@ -131,18 +131,28 @@ pub fn do_unescape<'a>(
     custom_entities: Option<&HashMap<Vec<u8>, Vec<u8>>>,
 ) -> Result<Cow<'a, [u8]>, EscapeError> {
     let mut unescaped = None;
+    let mut start = 0;
     let mut last_end = 0;
-    let mut iter = memchr::memchr2_iter(b'&', b';', raw);
-    while let Some(start) = iter.by_ref().find(|p| raw[*p] == b'&') {
-        match iter.next() {
-            Some(end) if raw[end] == b';' => {
-                // append valid data
+    let iter = memchr::memchr2_iter(b'&', b';', raw);
+
+    enum State { Normal, Entity }
+    let mut state = State::Normal;
+
+    for pos in iter {
+        match (raw[pos], &state) {
+            // RUFFLE: accept & without matching ;, just ignore it and look for next &
+            (b'&', _) => {
+                start = pos;
+                state = State::Entity;
+            },
+            (b';', State::Entity) => {
                 if unescaped.is_none() {
                     unescaped = Some(Vec::with_capacity(raw.len()));
                 }
                 let unescaped = unescaped.as_mut().expect("initialized");
                 unescaped.extend_from_slice(&raw[last_end..start]);
 
+                let end = pos;
                 // search for character correctness
                 let pat = &raw[start + 1..end];
                 if let Some(s) = named_entity(pat) {
@@ -152,15 +162,13 @@ pub fn do_unescape<'a>(
                 } else if let Some(value) = custom_entities.and_then(|hm| hm.get(pat)) {
                     unescaped.extend_from_slice(&value);
                 } else {
-                    return Err(EscapeError::UnrecognizedSymbol(
-                        start + 1..end,
-                        String::from_utf8(pat.to_vec()),
-                    ));
+                    // RUFFLE: pass unrecognized entities like `&adsf;` as-is
+                    unescaped.extend_from_slice(&raw[start..end+1]);
                 }
-
+                state = State::Normal;
                 last_end = end + 1;
             }
-            _ => return Err(EscapeError::UnterminatedEntity(start..raw.len())),
+            _ => {},
         }
     }
 
@@ -1711,7 +1719,17 @@ fn test_unescape() {
     assert_eq!(&*unescape(b"&lt;test&gt;").unwrap(), b"<test>");
     assert_eq!(&*unescape(b"&#x30;").unwrap(), b"0");
     assert_eq!(&*unescape(b"&#48;").unwrap(), b"0");
-    assert!(unescape(b"&foo;").is_err());
+
+    // RUFFLE SPECIFIC:
+    //assert!(unescape(b"&foo;").is_err());
+    assert_eq!(&*unescape(b"&foo;").unwrap(), b"&foo;");
+    assert_eq!(&*unescape(b"a & b").unwrap(), b"a & b");
+    assert_eq!(&*unescape(b"a &&& b").unwrap(), b"a &&& b");
+    assert_eq!(&*unescape(b"a & c & b").unwrap(), b"a & c & b");
+    assert_eq!(&*unescape(b"a &amp; c & b").unwrap(), b"a & c & b");
+    assert_eq!(&*unescape(b"a & c &amp; b").unwrap(), b"a & c & b");
+    assert_eq!(&*unescape(b"a & 12 & 345 & 6789 b").unwrap(), b"a & 12 & 345 & 6789 b");
+    assert_eq!(&*unescape(b"A &#39; &amp; & &asdf; ").unwrap(), b"A ' & & &asdf; ");
 }
 
 #[test]
@@ -1727,7 +1745,10 @@ fn test_unescape_with() {
     assert_eq!(&*unescape_with(b"&#x30;", &custom_entities).unwrap(), b"0");
     assert_eq!(&*unescape_with(b"&#48;", &custom_entities).unwrap(), b"0");
     assert_eq!(&*unescape_with(b"&foo;", &custom_entities).unwrap(), b"BAR");
-    assert!(unescape_with(b"&fop;", &custom_entities).is_err());
+
+    // RUFFLE SPECIFIC:
+    //assert!(unescape_with(b"&fop;", &custom_entities).is_err());
+    assert_eq!(&*unescape_with(b"&fop;", &custom_entities).unwrap(), b"&fop;");
 }
 
 #[test]
