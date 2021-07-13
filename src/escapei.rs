@@ -167,18 +167,29 @@ where
 {
     let bytes = raw.as_bytes();
     let mut unescaped = None;
+    let mut start = 0;
     let mut last_end = 0;
-    let mut iter = memchr2_iter(b'&', b';', bytes);
-    while let Some(start) = iter.by_ref().find(|p| bytes[*p] == b'&') {
-        match iter.next() {
-            Some(end) if bytes[end] == b';' => {
-                // append valid data
+
+    let iter = memchr2_iter(b'&', b';', bytes);
+
+    enum State { Normal, Entity }
+    let mut state = State::Normal;
+
+    for pos in iter {
+        match (bytes[pos], &state) {
+            // RUFFLE: accept & without matching ;, just ignore it and look for next &
+            (b'&', _) => {
+                start = pos;
+                state = State::Entity;
+            },
+            (b';', State::Entity) => {
                 if unescaped.is_none() {
                     unescaped = Some(String::with_capacity(raw.len()));
                 }
                 let unescaped = unescaped.as_mut().expect("initialized");
                 unescaped.push_str(&raw[last_end..start]);
 
+                let end = pos;
                 // search for character correctness
                 let pat = &raw[start + 1..end];
                 if pat.starts_with('#') {
@@ -190,15 +201,13 @@ where
                 } else if let Some(value) = resolve_entity(pat) {
                     unescaped.push_str(value);
                 } else {
-                    return Err(EscapeError::UnrecognizedSymbol(
-                        start + 1..end,
-                        pat.to_string(),
-                    ));
+                    // RUFFLE: pass unrecognized entities like `&adsf;` as-is
+                    unescaped.push_str(&raw[start..end+1]);
                 }
-
+                state = State::Normal;
                 last_end = end + 1;
             }
-            _ => return Err(EscapeError::UnterminatedEntity(start..raw.len())),
+            _ => {},
         }
     }
 
@@ -1745,7 +1754,17 @@ fn test_unescape() {
     assert_eq!(unescape("&lt;test&gt;").unwrap(), "<test>");
     assert_eq!(unescape("&#x30;").unwrap(), "0");
     assert_eq!(unescape("&#48;").unwrap(), "0");
-    assert!(unescape("&foo;").is_err());
+
+    // RUFFLE SPECIFIC:
+    //assert!(unescape("&foo;").is_err());
+    assert_eq!(unescape("&foo;").unwrap(), "&foo;");
+    assert_eq!(unescape("a & b").unwrap(), "a & b");
+    assert_eq!(unescape("a &&& b").unwrap(), "a &&& b");
+    assert_eq!(unescape("a & c & b").unwrap(), "a & c & b");
+    assert_eq!(unescape("a &amp; c & b").unwrap(), "a & c & b");
+    assert_eq!(unescape("a & c &amp; b").unwrap(), "a & c & b");
+    assert_eq!(unescape("a & 12 & 345 & 6789 b").unwrap(), "a & 12 & 345 & 6789 b");
+    assert_eq!(unescape("A &#39; &amp; & &asdf; ").unwrap(), "A ' & & &asdf; ");
 }
 
 #[test]
@@ -1766,7 +1785,10 @@ fn test_unescape_with() {
     assert_eq!(unescape_with("&#x30;", custom_entities).unwrap(), "0");
     assert_eq!(unescape_with("&#48;", custom_entities).unwrap(), "0");
     assert_eq!(unescape_with("&foo;", custom_entities).unwrap(), "BAR");
-    assert!(unescape_with("&fop;", custom_entities).is_err());
+
+    // RUFFLE SPECIFIC:
+    //assert!(unescape_with("&fop;", custom_entities).is_err());
+    assert_eq!(&*unescape_with("&fop;", custom_entities).unwrap(), "&fop;");
 }
 
 #[test]
