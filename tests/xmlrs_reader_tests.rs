@@ -180,7 +180,7 @@ fn issue_93_large_characters_in_entity_references() {
         r#"<hello>&𤶼;</hello>"#.as_bytes(),
         r#"
             |StartElement(hello)
-            |1:10 FailedUnescape([38, 240, 164, 182, 188, 59]; Error while escaping character at range 1..5: Unrecognized escape symbol: Ok("𤶼"))
+            |Characters(&𤶼;)
             |EndElement(hello)
             |EndDocument
         "#
